@@ -1,17 +1,22 @@
 from flask import Flask, render_template, request, jsonify, session
+from dotenv import load_dotenv
+import os
+load_dotenv()
+api_key = os.getenv("GROQ_API_KEY")
+map_key = os.getenv("MAP_KEY")
 import re
 import requests
 from openai import OpenAI
 
 app = Flask(__name__)
-app.secret_key = 'PICKUP'  # Required for session storage
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
 
 client = OpenAI(
-    api_key="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",
+    api_key=api_key,
     base_url="https://api.groq.com/openai/v1"
 )
 
-ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImQzZmQyZDBhNGJmMjQ1NWE4YjY5NmU1ZTdiYWExNDNiIiwiaCI6Im11cm11cjY0In0="
+ORS_API_KEY = map_key
 ORS_BASE_URL = "https://api.openrouteservice.org/v2/directions"
 MODEL = "llama3-8b-8192"
 
