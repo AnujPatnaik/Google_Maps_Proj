@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Pickup Optimizer</title>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    #map { height: 600px; width: 100%; }
+    .btn { margin: 10px; }
+    #pickup-info { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h2>Select Driver and Passenger Locations</h2>
+  <div id="map"></div>
+
+  <button class="btn" onclick="findPickup()">Find Pickup Point</button>
+
+  <div id="pickup-info" style="display:none;">
+    <p><strong>Suggested Pickup:</strong> <span id="pickup-coords"></span></p>
+    <p>Do you like this pickup point?</p>
+    <button onclick="confirmPickup(true)">Yes, it's good</button>
+    <button onclick="showFeedbackForm()">No, suggest another</button>
+
+    <div id="feedback-form" style="display:none; margin-top:10px;">
+      <label for="feedback">What would you prefer?</label><br>
+      <textarea id="feedback" rows="3" cols="40" placeholder="e.g., closer to main road, more shaded area"></textarea><br>
+      <button onclick="submitFeedback()">Submit Feedback</button>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="/static/map.js"></script>
+</body>
+</html>
