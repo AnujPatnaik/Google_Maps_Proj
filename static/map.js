@@ -37,7 +37,6 @@ function drawRoutes(driverToPickup, passengerToPickup, pickup) {
   console.log("Driver to Pickup geometry:", driverToPickup.geometry);
   console.log("Passenger to Pickup geometry:", passengerToPickup.geometry);
 
-  // Draw driver route (red)
   try {
     driverRoute = L.polyline(driverToPickup.geometry.map(pt => [pt.lat, pt.lng]), {
       color: 'red',
