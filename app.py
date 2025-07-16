@@ -64,7 +64,6 @@ def confirm_pickup():
     driver = session.get('driver')
     passenger = session.get('passenger')
 
-    # Generate a revised pickup point using the feedback
     pickup, raw = suggest_pickup(driver, passenger, passenger_feedback)
 
     if not pickup:
