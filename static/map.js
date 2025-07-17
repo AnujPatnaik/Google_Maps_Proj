@@ -1,188 +1,169 @@
+let map;
+let driverCoords = null;
+let passengerCoords = null;
+let driverMarker = null;
+let passengerMarker = null;
+let pickupMarker = null;
+let routePolyline = null;
+function initMap() {
+  map = new google.maps.Map(document.getElementById("map"), {
+    center: { lat: 37.76, lng: -122.42 },
+    zoom: 13,
+  });
 
-const L = window.L // Declare the L variable
+  map.addListener("click", (e) => {
+    const latlng = {
+      lat: e.latLng.lat(),
+      lng: e.latLng.lng(),
+    };
 
-document.addEventListener("DOMContentLoaded", () => {
-  if (typeof L === "undefined") {
-    console.error(
-      "Frontend: Leaflet.js (L) is not loaded. Please ensure 'https://unpkg.com/leaflet/dist/leaflet.js' is correctly linked in index.html before this script.",
-    )
-    return
+    const role = document.getElementById("roleSelect").value;
+
+    if (role === "driver") {
+      driverCoords = latlng;
+      if (driverMarker) driverMarker.setMap(null);
+      driverMarker = new google.maps.Marker({
+        position: latlng,
+        map,
+        title: "Driver",
+        icon: {
+          url: "https://cdn-icons-png.flaticon.com/512/743/743131.png",
+          scaledSize: new google.maps.Size(30, 30),
+        },
+      });
+    } else if (role === "passenger") {
+      passengerCoords = latlng;
+      if (passengerMarker) passengerMarker.setMap(null);
+      passengerMarker = new google.maps.Marker({
+        position: latlng,
+        map,
+        title: "Passenger",
+        icon: {
+          url: "https://cdn-icons-png.flaticon.com/512/1946/1946429.png",
+          scaledSize: new google.maps.Size(30, 30),
+        },
+      });
+    }
+  });
+}
+
+function useMyLocation() {
+  if (!navigator.geolocation) {
+    alert("Geolocation not supported.");
+    return;
   }
 
-  const map = L.map("map").setView([37.76, -122.42], 13)
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "© OpenStreetMap contributors",
-  }).addTo(map)
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const latlng = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+      };
 
-  const blueIcon = L.icon({ iconUrl: "https://cdn-icons-png.flaticon.com/512/743/743131.png", iconSize: [30, 30] })
-  const greenIcon = L.icon({ iconUrl: "https://cdn-icons-png.flaticon.com/512/1946/1946429.png", iconSize: [30, 30] })
-  const redIcon = L.icon({ iconUrl: "https://cdn-icons-png.flaticon.com/512/684/684908.png", iconSize: [35, 35] })
+      map.setCenter(latlng);
 
-  let driverMarker, passengerMarker, pickupMarker
-  let driverRoute, passengerRoute
-  let driverCoords = null,
-    passengerCoords = null
+      const role = document.getElementById("roleSelect").value;
 
-  map.on("click", (e) => {
-    const latlng = e.latlng
-    if (!driverCoords) {
-      driverCoords = latlng
-      driverMarker = L.marker(latlng, { icon: blueIcon }).addTo(map).bindTooltip("Driver", { direction: "top" })
-      console.log("Frontend: Driver location set:", driverCoords)
-    } else if (!passengerCoords) {
-      passengerCoords = latlng
-      passengerMarker = L.marker(latlng, { icon: greenIcon }).addTo(map).bindTooltip("Passenger", { direction: "top" })
-      console.log("Frontend: Passenger location set:", passengerCoords)
-    } else {
-      alert("Both locations selected. Refresh to start over.")
+      if (role === "driver") {
+        driverCoords = latlng;
+        if (driverMarker) driverMarker.setMap(null);
+        driverMarker = new google.maps.Marker({
+          position: latlng,
+          map,
+          title: "Driver",
+          icon: {
+            url: "https://cdn-icons-png.flaticon.com/512/743/743131.png",
+            scaledSize: new google.maps.Size(30, 30),
+          },
+        });
+      } else if (role === "passenger") {
+        passengerCoords = latlng;
+        if (passengerMarker) passengerMarker.setMap(null);
+        passengerMarker = new google.maps.Marker({
+          position: latlng,
+          map,
+          title: "Passenger",
+          icon: {
+            url: "https://cdn-icons-png.flaticon.com/512/1946/1946429.png",
+            scaledSize: new google.maps.Size(30, 30),
+          },
+        });
+      }
+    },
+    (error) => {
+      alert("Geolocation error: " + error.message);
     }
+  );
+}
+
+function findPickup() {
+  if (!driverCoords || !passengerCoords) {
+    alert("Please select both driver and passenger locations.");
+    return;
+  }
+
+  fetch("/get_pickup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      driver: driverCoords,
+      passenger: passengerCoords,
+    }),
   })
+    .then((response) => response.json())
+    .then((data) => {
+      if (data.error) {
+        alert("Error: " + data.error);
+        return;
+      }
 
-  window.drawRoutes = (driverToPickup, passengerToPickup, pickup) => {
-    if (driverRoute) {
-      map.removeLayer(driverRoute)
-      driverRoute = null
-    }
-    if (passengerRoute) {
-      map.removeLayer(passengerRoute)
-      passengerRoute = null
-    }
+      const pickup = data.pickup;
 
-    console.log("Frontend: --- Drawing Routes ---")
-    console.log("Frontend: Driver Coords (from map state):", driverCoords)
-    console.log("Frontend: Passenger Coords (from map state):", passengerCoords)
-    console.log("Frontend: Pickup Coords (from backend):", pickup)
+      if (pickupMarker) pickupMarker.setMap(null);
 
-    if (!driverToPickup || !driverToPickup.geometry || !passengerToPickup || !passengerToPickup.geometry) {
-      console.error("Frontend: Missing route geometry data from backend.")
-      return
-    }
-
-    console.log(
-      "Frontend: DriverToPickup Geometry (first 5 points):",
-      driverToPickup.geometry.slice(0, 5),
-      "...",
-      "Total points:",
-      driverToPickup.geometry.length,
-    )
-    console.log(
-      "Frontend: PassengerToPickup Geometry (first 5 points):",
-      passengerToPickup.geometry.slice(0, 5),
-      "...",
-      "Total points:",
-      passengerToPickup.geometry.length,
-    )
-
-    try {
-      driverRoute = L.polyline(
-        driverToPickup.geometry.map((pt) => [pt.lat, pt.lng]),
-        {
-          color: "red",
-          weight: 4,
-          opacity: 0.9,
+      pickupMarker = new google.maps.Marker({
+        position: pickup,
+        map,
+        title: "Suggested Pickup Point",
+        icon: {
+          url: "https://maps.google.com/mapfiles/ms/icons/green-dot.png",
+          scaledSize: new google.maps.Size(30, 30),
         },
-      ).addTo(map)
-      console.log("Frontend: Driver route drawn.")
-    } catch (e) {
-      console.warn("Frontend: Error drawing driver route polyline, falling back to straight line.", e)
-      driverRoute = L.polyline(
-        [
-          [driverCoords.lat, driverCoords.lng],
-          [pickup.lat, pickup.lng],
-        ],
-        {
-          color: "red",
-          weight: 4,
-          opacity: 0.9,
-        },
-      ).addTo(map)
-    }
+      });
 
-    try {
-      passengerRoute = L.polyline(
-        passengerToPickup.geometry.map((pt) => [pt.lat, pt.lng]),
-        {
-          color: "green", // Explicitly green
-          weight: 4,
-          dashArray: "5,8", // Explicitly dashed
-          opacity: 0.9,
-        },
-      ).addTo(map)
-      console.log("Frontend: Passenger route drawn.")
-    } catch (e) {
-      console.warn("Frontend: Error drawing passenger route polyline, falling back to straight line.", e)
-      passengerRoute = L.polyline(
-        [
-          [passengerCoords.lat, passengerCoords.lng],
-          [pickup.lat, pickup.lng],
-        ],
-        {
-          color: "green",
-          weight: 4,
-          dashArray: "5,8",
-          opacity: 0.9,
-        },
-      ).addTo(map)
-    }
+      map.setCenter(pickup);
 
-    map.fitBounds([
-      [pickup.lat, pickup.lng],
-      [driverCoords.lat, driverCoords.lng],
-      [passengerCoords.lat, passengerCoords.lng],
-    ])
-    console.log("Frontend: Map bounds fitted.")
-  }
+      const resultsDiv = document.getElementById("results");
+      resultsDiv.innerHTML = `
+        <strong>Pickup Location:</strong><br>
+        Latitude: ${pickup.lat.toFixed(5)}, Longitude: ${pickup.lng.toFixed(5)}<br><br>
+        <strong>Driver Route:</strong> ${data.driver.text.duration}, ${data.driver.text.distance}<br>
+        <strong>Passenger Route:</strong> ${data.passenger.text.duration}, ${data.passenger.text.distance}<br><br>
+        <img src="${data.street_view_url}" alt="Street View" width="100%"><br><br>
+        <strong>Map Analysis:</strong><br>${data.gemini_analysis}
+      `;
 
-  window.findPickup = () => {
-    if (!driverCoords || !passengerCoords) {
-      alert("Please select both driver and passenger.")
-      return
-    }
+      if (routePolyline) {
+        routePolyline.setMap(null);
+      }
 
-    console.log(
-      "Frontend: Sending request to /get_pickup with driver:",
-      driverCoords,
-      "and passenger:",
-      passengerCoords,
-    )
+      const routeCoords = [
+        { lat: driverCoords.lat, lng: driverCoords.lng },
+        { lat: passengerCoords.lat, lng: passengerCoords.lng },
+        { lat: pickup.lat, lng: pickup.lng },
+      ];
 
-    fetch("/get_pickup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ driver: driverCoords, passenger: passengerCoords }),
+      routePolyline = new google.maps.Polyline({
+        path: routeCoords,
+        geodesic: true,
+        strokeColor: "#FF0000",
+        strokeOpacity: 1.0,
+        strokeWeight: 3,
+      });
+
+      routePolyline.setMap(map);
     })
-      .then((res) => {
-        if (!res.ok) {
-          return res.json().then((err) => {
-            throw new Error(err.error || "Unknown error from server")
-          })
-        }
-        return res.json()
-      })
-      .then((data) => {
-        console.log("Frontend: Data received from backend:", data)
-
-        if (data.error) {
-          alert(data.error)
-          return
-        }
-        const { pickup, driverToPickup, passengerToPickup, message } = data
-
-        if (pickupMarker) map.removeLayer(pickupMarker)
-        pickupMarker = L.marker([pickup.lat, pickup.lng], { icon: redIcon })
-          .addTo(map)
-          .bindTooltip("Pickup Point", { direction: "top" })
-        console.log("Frontend: Pickup marker added.")
-
-        window.drawRoutes(driverToPickup, passengerToPickup, pickup)
-
-        document.getElementById("pickup-coords").textContent = `${pickup.lat.toFixed(5)}, ${pickup.lng.toFixed(5)}`
-        document.getElementById("pickup-info").style.display = "block"
-        console.log("Frontend: Pickup message:", message)
-      })
-      .catch((err) => {
-        alert("Error getting pickup point: " + err.message)
-        console.error("Frontend: Error fetching pickup point:", err)
-      })
-  }
-})
+    .catch((error) => {
+      alert("Pickup error: " + error.message);
+    });
+}
