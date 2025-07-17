@@ -1,7 +1,8 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, session
 from dotenv import load_dotenv
-import os, requests
-import polyline
+import os, re, requests, io
+from PIL import Image
+import pytesseract
 
 load_dotenv()
 google_maps_key = os.getenv("GOOGLE_MAP_KEY")
@@ -9,13 +10,63 @@ google_maps_key = os.getenv("GOOGLE_MAP_KEY")
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
 
-def decode_polyline(polyline_str):
+
+def extract_coordinates(text):
+    match = re.search(r"(-?\d+\.\d+)[^\d-]+(-?\d+\.\d+)", text)
+    if match:
+        try:
+            lat = float(match.group(1))
+            lng = float(match.group(2))
+            if -90 <= lat <= 90 and -180 <= lng <= 180:
+                return {'lat': lat, 'lng': lng}
+        except:
+            return None
+    return None
+
+
+def geocode_address(address):
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    params = {
+        "address": address,
+        "key": google_maps_key
+    }
     try:
-        decoded_coords = polyline.decode(polyline_str)
-        return [{'lat': lat, 'lng': lng} for lat, lng in decoded_coords]
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data['status'] == 'OK' and data['results']:
+            loc = data['results'][0]['geometry']['location']
+            return {'lat': loc['lat'], 'lng': loc['lng']}
+    except Exception:
+        return None
+    return None
+
+
+def ocr_extract_pickup_point(image_url):
+    try:
+        resp = requests.get(image_url, timeout=10)
+        resp.raise_for_status()
+        img = Image.open(io.BytesIO(resp.content))
+        text = pytesseract.image_to_string(img)
+        print(f"OCR Text Extracted: {text}")  # Debug
+
+        coords = extract_coordinates(text)
+        if coords:
+            return coords, "Pickup coordinates extracted from image OCR."
+
+        lines = text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if len(line) > 5 and any(char.isalpha() for char in line):
+                coords = geocode_address(line)
+                if coords:
+                    return coords, f"Pickup location geocoded from OCR text: '{line}'"
+
+        return None, "No valid pickup location found in OCR text."
+
     except Exception as e:
-        print(f"Backend: Error decoding polyline: {e}")
-        return []
+        return None, f"OCR failed: {e}"
+
 
 def get_route(origin, destination, mode):
     try:
@@ -26,147 +77,89 @@ def get_route(origin, destination, mode):
             "mode": mode,
             "key": google_maps_key
         }
-        # --- Enhanced logging for debugging ---
-        print(f"Backend: Google Directions API Request - Origin: {params['origin']}, Destination: {params['destination']}, Mode: {mode}")
-        # --- End enhanced logging ---
-
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
 
-        print(f"Backend: Google API response status for {mode} route: {data.get('status')}")
-
         routes = data.get('routes', [])
         if not routes:
-            print(f"Backend: No {mode} route found in Google API response.")
             return {'error': 'No route found'}
-
-        overview_polyline_points = routes[0].get('overview_polyline', {}).get('points')
-        if not overview_polyline_points:
-            print(f"Backend: No overview_polyline.points found for {mode} route. Falling back to straight line.")
-            leg = routes[0]['legs'][0]
-            start_loc = leg['start_location']
-            end_loc = leg['end_location']
-            geometry = [{'lat': start_loc['lat'], 'lng': start_loc['lng']},
-                        {'lat': end_loc['lat'], 'lng': end_loc['lng']}]
-        else:
-            print(f"Backend: Raw overview_polyline.points for {mode} route: {overview_polyline_points[:50]}...")
-            geometry = decode_polyline(overview_polyline_points)
-            print(f"Backend: Decoded geometry points count for {mode} route: {len(geometry)}")
 
         leg = routes[0]['legs'][0]
         return {
             'duration_min': round(leg['duration']['value'] / 60, 1),
             'distance_km': round(leg['distance']['value'] / 1000, 2),
-            'geometry': geometry,
+            'geometry': routes[0].get('overview_polyline', {}),
             'text': {
                 'duration': leg['duration']['text'],
                 'distance': leg['distance']['text']
             }
         }
-    except requests.exceptions.RequestException as e:
-        print(f"Backend: Request error for {mode} route: {e}")
-        return {'error': f"Network or API error: {e}"}
     except Exception as e:
-        print(f"Backend: An unexpected error occurred in get_route for {mode} route: {e}")
         return {'error': str(e)}
 
-def find_parking_nearby(location, radius=1000, max_results=10):
-    try:
-        url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-        params = {
-            "location": f"{location['lat']},{location['lng']}",
-            "radius": radius,
-            "type": "parking",
-            "key": google_maps_key
-        }
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        results = data.get('results', [])[:max_results]
-        candidates = []
-        for r in results:
-            loc = r.get('geometry', {}).get('location')
-            if loc:
-                candidates.append({'lat': loc['lat'], 'lng': loc['lng']})
-        return candidates
-    except Exception as e:
-        print(f"Backend: Error finding parking: {e}")
-        return []
-
-def get_midpoint(p1, p2):
-    return {'lat': (p1['lat'] + p2['lat']) / 2, 'lng': (p1['lng'] + p2['lng']) / 2}
-
-def score_pickup_point(driver, passenger, candidate):
-    print(f"Backend: Scoring pickup point. Driver: {driver}, Passenger: {passenger}, Candidate: {candidate}")
-
-    driver_route = get_route(driver, candidate, 'driving')
-    passenger_route = get_route(passenger, candidate, 'walking')
-
-    if 'error' in driver_route:
-        print(f"Backend: Error getting driver route to candidate: {driver_route['error']}")
-        return None
-    if 'error' in passenger_route:
-        print(f"Backend: Error getting passenger route to candidate: {passenger_route['error']}")
-        return None
-
-    driver_time = driver_route['duration_min']
-    passenger_time = passenger_route['duration_min']
-
-    if passenger_time > 30:
-        print(f"Backend: Passenger walk time {passenger_time} min exceeds 30 min threshold.")
-        return None
-
-    score = max(driver_time, passenger_time)
-    return score, candidate, driver_route, passenger_route
 
 @app.route("/")
 def index():
     return render_template("index.html", google_maps_api_key=google_maps_key)
 
+
 @app.route("/get_pickup", methods=["POST"])
 def get_pickup():
-    data = request.get_json()
-    driver = data.get('driver')
-    passenger = data.get('passenger')
-
+    j = request.get_json()
+    driver, passenger = j.get('driver'), j.get('passenger')
     if not driver or not passenger:
         return jsonify({'error': 'Missing driver or passenger coordinates'}), 400
 
-    midpoint = get_midpoint(driver, passenger)
-    candidates = find_parking_nearby(midpoint, radius=1500, max_results=10)
+    session['driver'], session['passenger'] = driver, passenger
 
-    if not candidates:
-        return jsonify({'error': 'No parking spots found near midpoint.'}), 400
+    static_map_url = (
+        "https://maps.googleapis.com/maps/api/staticmap"
+        f"?size=640x400"
+        f"&markers=color:blue|label:D|{driver['lat']},{driver['lng']}"
+        f"&markers=color:green|label:P|{passenger['lat']},{passenger['lng']}"
+        f"&key={google_maps_key}"
+    )
 
-    best_score = None
-    best_pickup = None
-    best_driver_route = None
-    best_passenger_route = None
+    pickup, message = ocr_extract_pickup_point(static_map_url)
 
-    for candidate in candidates:
-        result = score_pickup_point(driver, passenger, candidate)
-        if result:
-            score, pickup, d_route, p_route = result
-            if best_score is None or score < best_score:
-                best_score = score
-                best_pickup = pickup
-                best_driver_route = d_route
-                best_passenger_route = p_route
+    if not pickup:
+        return jsonify({'error': message}), 400
 
-    if not best_pickup:
-        return jsonify({'error': 'No suitable pickup point found within walking distance.'}), 400
+    driver_route = get_route(driver, pickup, 'driving')
+    passenger_route = get_route(passenger, pickup, 'walking')
 
-    print(f"Backend: Sending response. Pickup: {best_pickup}")
-    print(f"Backend: DriverToPickup geometry length: {len(best_driver_route['geometry']) if best_driver_route and best_driver_route.get('geometry') else 0}")
-    print(f"Backend: PassengerToPickup geometry length: {len(best_passenger_route['geometry']) if best_passenger_route and best_passenger_route.get('geometry') else 0}")
+    if 'error' in driver_route or 'error' in passenger_route:
+        return jsonify({'error': driver_route.get('error') or passenger_route.get('error')}), 400
+
+    if passenger_route['duration_min'] > 15:
+        return jsonify({'error': f"Pickup point is too far for passenger to walk ({passenger_route['duration_min']} min). Please suggest another."}), 400
+
+    street_view_url = (
+        f"https://maps.googleapis.com/maps/api/streetview?size=600x300&location={pickup['lat']},{pickup['lng']}&key={google_maps_key}"
+    )
+    static_map_url_with_pickup = (
+        "https://maps.googleapis.com/maps/api/staticmap"
+        f"?size=640x400"
+        f"&markers=color:blue|label:D|{driver['lat']},{driver['lng']}"
+        f"&markers=color:green|label:P|{passenger['lat']},{passenger['lng']}"
+        f"&markers=color:red|label:U|{pickup['lat']},{pickup['lng']}"
+        # Red path: driver to pickup
+        f"&path=color:0xff000080|{driver['lat']},{driver['lng']}|{pickup['lat']},{pickup['lng']}"
+        # Green path: passenger to pickup
+        f"&path=color:0x00ff0080|{passenger['lat']},{passenger['lng']}|{pickup['lat']},{pickup['lng']}"
+        f"&key={google_maps_key}"
+    )
 
     return jsonify({
-        'pickup': best_pickup,
-        'driverToPickup': best_driver_route,
-        'passengerToPickup': best_passenger_route,
-        'message': f"Best pickup found with max travel time {best_score} min."
+        'pickup': pickup,
+        'driver': driver_route,
+        'passenger': passenger_route,
+        'street_view_url': street_view_url,
+        'static_map_url': static_map_url_with_pickup,
+        'message': message
     })
 
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port = 5001)
